@@ -1,0 +1,1491 @@
+meal_skip.py
+
+
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from datetime import date
+import psycopg2
+import os
+
+router = APIRouter()
+
+# Correct template directory path
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "..", "templates"))
+
+# Connect to PostgreSQL database
+conn = psycopg2.connect(
+    database="messManager",
+    user="postgres",
+    password="pavi",  # Replace with your password
+    host="localhost",
+    port="5432"
+)
+
+# GET route to show the skip meal form
+@router.get("/skip_meal", response_class=HTMLResponse)
+def get_skip_meal_form(request: Request):
+    return templates.TemplateResponse("skip_meal.html", {"request": request})
+
+@router.post("/skip_meal", response_class=HTMLResponse)
+def skip_meal(request: Request, user_id: int = Form(...), meal_type: str = Form(...)):
+    cur = conn.cursor()
+    today = date.today()
+
+
+    try:
+        cur.execute("""
+            INSERT INTO meal_skip (user_id, date, meal_type)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id, date, meal_type) DO NOTHING
+        """, (user_id, today, meal_type))
+        conn.commit()
+
+        if cur.rowcount == 0:
+            message = f"⚠️ You already skipped {meal_type} today."
+        else:
+            message = f"✅ You have successfully skipped {meal_type} for {today}."
+
+    except Exception as e:
+        conn.rollback()  # Very important!
+        message = f"❌ Error: {str(e)}"
+
+    finally:
+        cur.close()
+
+    return templates.TemplateResponse("skip_meal.html", {"request": request, "message": message})
+
+# GET route to view skipped meals
+@router.get("/view_skipped_meals/{user_id}", response_class=HTMLResponse)
+def view_skipped_meals(request: Request, user_id: int):
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT date, meal_type
+            FROM meal_skip
+            WHERE user_id = %s
+            ORDER BY date DESC
+        """, (user_id,))
+        meals = cur.fetchall()
+    except Exception as e:
+        conn.rollback()
+        meals = []
+    finally:
+        cur.close()
+
+    return templates.TemplateResponse("view_skip_meal.html", {"request": request, "meals": meals})
+
+
+    view_skip.html
+    <h2>Skipped Meals</h2>
+
+{% if meals %}
+    <ul>
+        {% for meal in meals %}
+            <li>{{ meal[0] }} - {{ meal[1] | capitalize }}</li>
+        {% endfor %}
+    </ul>
+{% else %}
+    <p>No skipped meals yet.</p>
+{% endif %}
+
+<a href="/skip-meal">Back to Skip Meal</a>
+----------------------------------------------
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from datetime import datetime
+import psycopg2
+import os
+
+router = APIRouter()
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "..", "templates"))
+
+# Database connection
+conn = psycopg2.connect(
+    database="messManager",
+    user="postgres",
+    password="pavi",
+    host="localhost",
+    port="5432"
+)
+
+# 📝 Feedback form route
+@router.get("/feedback", response_class=HTMLResponse)
+def get_feedback_form(request: Request):
+    return templates.TemplateResponse("feedback.html", {"request": request})
+
+# ✅ Feedback submission handler
+@router.post("/feedback", response_class=HTMLResponse)
+def submit_feedback(request: Request, user_id: int = Form(...), message: str = Form(...)):
+    cur = conn.cursor()
+    submitted_at = datetime.now()
+    try:
+        cur.execute("""
+            INSERT INTO feedback (user_id, message, submitted_at)
+            VALUES (%s, %s, %s)
+        """, (user_id, message, submitted_at))
+        conn.commit()
+        result_message = "✅ Feedback submitted successfully!"
+    except Exception as e:
+        conn.rollback()
+        result_message = f"❌ Error: {str(e)}"
+    finally:
+        cur.close()
+
+    return templates.TemplateResponse("feedback.html", {
+        "request": request,
+        "message": result_message
+    })
+
+# 🔍 Admin-only view of feedback
+@router.get("/view_feedback", response_class=HTMLResponse)
+def view_feedback(request: Request, user_id: int):
+    cur = conn.cursor()
+    try:
+        # 🔐 Check admin privilege
+        cur.execute("SELECT is_admin FROM users WHERE user_id = %s", (user_id,))
+        result = cur.fetchone()
+
+        if not result or not result[0]:
+            return templates.TemplateResponse("feedback_view.html", {
+                "request": request,
+                "error": "⛔ Access denied. Admins only.",
+                "feedbacks": []
+            })
+
+        # 📥 Fetch all feedback with student names
+        cur.execute("""
+            SELECT u.name, f.message, f.submitted_at
+            FROM feedback f
+            JOIN users u ON f.user_id = u.user_id
+            ORDER BY f.submitted_at DESC
+        """)
+        feedbacks = cur.fetchall()
+    except Exception as e:
+        conn.rollback()
+        return templates.TemplateResponse("view_feedback.html", {
+            "request": request,
+            "error": f"❌ Error: {str(e)}",
+            "feedbacks": []
+        })
+    finally:
+        cur.close()
+
+    return templates.TemplateResponse("view_feedback.html", {
+        "request": request,
+        "feedbacks": feedbacks,
+        "error": None
+    })
+-----------------------------------------------------------------------------------------------------------------------
+home.py
+
+from fastapi import APIRouter, Request
+from fastapi.responses import RedirectResponse
+from fastapi.templating import Jinja2Templates
+import os
+
+router = APIRouter()
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "..", "templates"))
+
+@router.get("/")
+def home(request: Request):
+    user_id = request.session.get("user_id")
+    is_admin = request.session.get("is_admin")  # Example: set this on login
+
+    return templates.TemplateResponse("home.html", {
+        "request": request,
+        "user_id": user_id,
+        "is_admin": is_admin
+    })
+
+    home.html
+
+    <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mess Manager - Home</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .panel { display: none; }
+  </style>
+</head>
+<body class="bg-light">
+
+<div class="container mt-5">
+  <div class="row justify-content-center">
+    <div class="col-md-6 text-center">
+      <h1 class="mb-4">Welcome to Mess Management System</h1>
+
+      <!-- Login Form -->
+      <form id="loginForm" class="card p-4 shadow">
+        <div class="mb-3">
+          <label for="user_id" class="form-label">Enter your User ID</label>
+          <input type="text" class="form-control" id="user_id" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Login</button>
+      </form>
+
+      <!-- Admin Panel -->
+      <div id="adminPanel" class="panel card p-4 shadow mt-4">
+        <h4 class="mb-3">Admin Panel</h4>
+        <div class="d-grid gap-3">
+          <a href="/menu_form" class="btn btn-outline-success">Update Daily Menu</a>
+          <a href="/view_feedback" class="btn btn-outline-info">View All Feedback</a>
+          <a href="/token_form" class="btn btn-outline-warning">Issue Special Token</a>
+          <button class="btn btn-danger" onclick="logout()">Logout</button>
+        </div>
+      </div>
+
+      <!-- Student Panel -->
+      <div id="studentPanel" class="panel card p-4 shadow mt-4">
+        <h4 class="mb-3">Student Panel</h4>
+        <div class="d-grid gap-3">
+          <a href="/view_menu" class="btn btn-outline-success">View Menu</a>
+          <a href="/skip_meal" class="btn btn-outline-danger">Skip Meal</a>
+          <a href="/feedback" class="btn btn-outline-info">Submit Feedback</a>
+          <a href="/token_form" class="btn btn-outline-warning">Get Token</a>
+          <a href="/bill" class="btn btn-outline-primary">View Bill</a>
+          <button class="btn btn-danger" onclick="logout()">Logout</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const loginForm = document.getElementById("loginForm");
+  const userInput = document.getElementById("user_id");
+  const adminPanel = document.getElementById("adminPanel");
+  const studentPanel = document.getElementById("studentPanel");
+
+  loginForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    const userId = userInput.value.trim().toLowerCase();
+
+    loginForm.style.display = "none";
+
+    if (userId === "admin") {
+      adminPanel.style.display = "block";
+    } else {
+      studentPanel.style.display = "block";
+    }
+  });
+
+  function logout() {
+    loginForm.style.display = "block";
+    adminPanel.style.display = "none";
+    studentPanel.style.display = "none";
+    userInput.value = "";
+  }
+</script>
+
+</body>
+</html>
+
+----------------------------------------------------
+auth.py
+
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse,RedirectResponse
+from fastapi.templating import Jinja2Templates
+import psycopg2
+import os
+
+router = APIRouter()
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "..", "templates"))
+
+# Database connection
+conn = psycopg2.connect(
+    database="messManager",
+    user="postgres",
+    password="pavi",
+    host="localhost",
+    port="5432"
+)
+@router.post("/loginn")
+def simulate_login(request: Request, user_id: int = Form(...)):
+    request.session["user_id"] = user_id
+    
+    # Define admin user_ids (you can make this a DB check too)
+    admin_ids = {3}  # Add more admin user_ids if needed
+
+    if user_id in admin_ids:
+        return RedirectResponse(url="/menu_form", status_code=302)  # Admin route
+    else:
+        return RedirectResponse(url="/token_form", status_code=302)  # Student route
+
+@router.get("/login", response_class=HTMLResponse)
+def show_login_form(request: Request):
+    return templates.TemplateResponse("loginn.html", {"request": request})
+    
+@router.post("/login", response_class=HTMLResponse)
+def login(request: Request, name: str = Form(...), password: str = Form(...)):
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, is_admin FROM users WHERE name = %s AND password = %s", (name, password))
+    result = cur.fetchone()
+    cur.close()
+
+    if result:
+        request.session['user_id'] = result[0]
+        request.session['is_admin'] = result[1]
+        return templates.TemplateResponse("dashboard.html", {
+            "request": request,
+            "message": "✅ Login successful!"
+        })
+    else:
+        return templates.TemplateResponse("loginn.html", {
+            "request": request,
+            "error": "❌ Invalid credentials"
+        })
+--------------------------------
+feedback.py
+
+
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from datetime import datetime
+import psycopg2
+import os
+
+router = APIRouter()
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "..", "templates"))
+
+# Database connection
+conn = psycopg2.connect(
+    database="messManager",
+    user="postgres",
+    password="pavi",
+    host="localhost",
+    port="5432"
+)
+
+# 📝 Feedback form route
+@router.get("/feedback", response_class=HTMLResponse)
+def get_feedback_form(request: Request):
+    return templates.TemplateResponse("feedback.html", {"request": request})
+
+
+# ✅ Feedback submission handler
+@router.post("/feedback", response_class=HTMLResponse)
+def submit_feedback(request: Request, user_id: int = Form(...), message: str = Form(...)):
+    cur = conn.cursor()
+    submitted_at = datetime.now()
+    try:
+        cur.execute("""
+            INSERT INTO feedback (user_id, message, submitted_at)
+            VALUES (%s, %s, %s)
+        """, (user_id, message, submitted_at))
+        conn.commit()
+        result_message = "✅ Feedback submitted successfully!"
+    except Exception as e:
+        conn.rollback()
+        result_message = f"❌ Error: {str(e)}"
+    finally:
+        cur.close()
+
+    return templates.TemplateResponse("feedback.html", {
+        "request": request,
+        "message": result_message
+    })
+@router.get("/view_feedback", response_class=HTMLResponse)
+def view_feedback(request: Request):
+    user_id = request.session.get('user_id')
+    is_admin = request.session.get('is_admin')
+
+    if not user_id or not is_admin:
+        return templates.TemplateResponse("view_feedback.html", {
+            "request": request,
+            "error": "⛔ Access denied. Admins only.",
+            "feedbacks": []
+        })
+
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT u.name, f.message, f.submitted_at
+            FROM feedback f
+            JOIN users u ON f.user_id = u.user_id
+            ORDER BY f.submitted_at DESC
+        """)
+        feedbacks = cur.fetchall()
+    except Exception as e:
+        conn.rollback()
+        return templates.TemplateResponse("view_feedback.html", {
+            "request": request,
+            "error": f"❌ Error: {str(e)}",
+            "feedbacks": []
+        })
+    finally:
+        cur.close()
+
+    return templates.TemplateResponse("view_feedback.html", {
+        "request": request,
+        "feedbacks": feedbacks,
+        "error": None
+    })
+feedback.html
+
+
+{% if is_admin %}
+    <a href="/view_feedback">🔍 View All Feedback</a>
+{% endif %}
+
+<form method="post" action="/feedback">
+    <label for="user_id">User ID:</label>
+    <input type="number" id="user_id" name="user_id" required>
+
+    <label for="message">Message:</label>
+    <textarea id="message" name="message" required></textarea>
+
+    <button type="submit">Submit Feedback</button>
+
+    {% if message %}
+        <p>{{ message }}</p>
+    {% endif %}
+</form>
+
+
+view_feedback.html
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>All Feedback</title>
+</head>
+<body>
+    <h2>All Feedback</h2>
+
+    {% if error %}
+        <p style="color:red;">{{ error }}</p>
+    {% endif %}
+
+    {% if feedbacks and feedbacks|length > 0 %}
+        <ul>
+            {% for name, message, submitted_at in feedbacks %}
+                <li><strong>{{ name }}</strong>: "{{ message }}" <em>({{ submitted_at }})</em></li>
+            {% endfor %}
+        </ul>
+    {% elif not error %}
+        <p>No feedback yet.</p>
+    {% endif %}
+
+    <p><a href="/dashboard">Back to Dashboard</a></p>
+</body>
+</html>
+------------------------------------------------------------------------------------
+meal_skip.py
+
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from datetime import date
+import psycopg2
+import os
+
+router = APIRouter()
+
+# Correct template directory path
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "..", "templates"))
+
+# Connect to PostgreSQL database
+conn = psycopg2.connect(
+    database="messManager",
+    user="postgres",
+    password="pavi",  # Replace with your password
+    host="localhost",
+    port="5432"
+)
+
+# GET route to show the skip meal form
+@router.get("/skip_meal", response_class=HTMLResponse)
+def get_skip_meal_form(request: Request):
+    return templates.TemplateResponse("skip_meal.html", {"request": request})
+
+@router.post("/skip_meal", response_class=HTMLResponse)
+def skip_meal(request: Request, user_id: int = Form(...), meal_type: str = Form(...)):
+    cur = conn.cursor()
+    today = date.today()
+
+
+    try:
+        cur.execute("""
+            INSERT INTO meal_skip (user_id, date, meal_type)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id, date, meal_type) DO NOTHING
+        """, (user_id, today, meal_type))
+        conn.commit()
+
+        if cur.rowcount == 0:
+            message = f"⚠️ You already skipped {meal_type} today."
+        else:
+            message = f"✅ You have successfully skipped {meal_type} for {today}."
+
+    except Exception as e:
+        conn.rollback()  # Very important!
+        message = f"❌ Error: {str(e)}"
+
+    finally:
+        cur.close()
+
+    return templates.TemplateResponse("skip_meal.html", {"request": request, "message": message})
+
+@router.get("/view_skipped_meals", response_class=HTMLResponse)
+def get_user_id_form(request: Request):
+    return templates.TemplateResponse("view_skip_form.html", {"request": request})
+
+@router.post("/view_skipped_meals", response_class=HTMLResponse)
+def view_skipped_meals(request: Request, user_id: int = Form(...)):
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT date, meal_type
+            FROM meal_skip
+            WHERE user_id = %s
+            ORDER BY date DESC
+        """, (user_id,))
+        meals = cur.fetchall()
+    except Exception as e:
+        conn.rollback()
+        meals = []
+    finally:
+        cur.close()
+
+    return templates.TemplateResponse("view_skip_meal.html", {"request": request, "meals": meals})
+
+view-skip_meal.html
+<!-- templates/view_skip_meal.html -->
+<html>
+<head>
+    <title>Skipped Meals</title>
+</head>
+<body>
+    <h1>Skipped Meals</h1>
+
+    {% if meals %}
+        <ul>
+            {% for meal in meals %}
+                <li>{{ meal[0] }} - {{ meal[1] }}</li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>No skipped meals found for this user.</p>
+    {% endif %}
+
+    <a href="/view_skipped_meals">🔙 Back</a>
+</body>
+</html>
+skip_meal.html
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Skip a Meal</title>
+</head>
+<body>
+    <h2>Skip Your Meal</h2>
+
+    {% if message %}
+        <p style="color: green;">{{ message }}</p>
+    {% endif %}
+<form method="post" action="/skip_meal">
+    <label for="user_id">User ID:</label>
+    <input type="number" id="user_id" name="user_id" required>
+
+    <label for="meal_type">Meal Type:</label>
+    <select name="meal_type" id="meal_type">
+        <option value="Breakfast">Breakfast</option>
+        <option value="Lunch">Lunch</option>
+        <option value="Dinner">Dinner</option>
+    </select>
+
+    <button type="submit">Skip Meal</button>
+</form>
+    <br>
+    <a href="/view_skipped_meals">View Skipped Meals</a>
+</body>
+</html>
+----------------------------------------------
+view_menu.html
+<h2>📅 Weekly Menu</h2>
+<table border="1">
+  <tr>
+    <th>Day</th>
+    <th>Breakfast</th>
+    <th>Lunch</th>
+    <th>Dinner</th>
+    <th>Special Item</th>
+    <th>Token_price</th>
+  </tr>
+  {% for day, breakfast, lunch, special_item, dinner, spcial_price in menu_data %}
+  <tr>
+    <td>{{ day }}</td>
+    <td>{{ breakfast }}</td>
+    <td>{{ lunch }}</td>
+    <td>{{ dinner }}</td>
+    <td>{{ special_item }}</td>
+    <td>{{ spcial_price }}</td>
+  </tr>
+  {% endfor %}
+</table>
+  menu.py 
+
+  from fastapi import APIRouter, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+import psycopg2
+import os
+
+router = APIRouter()
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "..", "templates"))
+
+# 📦 Database connection
+conn = psycopg2.connect(
+    database="messManager",
+    user="postgres",
+    password="pavi",
+    host="localhost",
+    port="5432"
+)
+
+# 🔐 Admin checker
+def is_user_admin(request: Request) -> bool:
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return False
+    cur = conn.cursor()
+    cur.execute("SELECT is_admin FROM users WHERE user_id = %s", (user_id,))
+    result = cur.fetchone()
+    cur.close()
+    return result and result[0]  # ✅ True if admin, ❌ False otherwise
+
+# 🔑 Quick login form
+@router.get("/loginn", response_class=HTMLResponse)
+def login_form(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request})
+
+@router.post("/loginn", response_class=HTMLResponse)
+def login_submit(request: Request, user_id: int = Form(...)):
+    request.session["user_id"] = user_id
+    return RedirectResponse(url="/menu_form", status_code=302)
+
+# 📄 Route: Menu Form (Admin Only)
+@router.get("/menu_form", response_class=HTMLResponse)
+def menu_form(request: Request):
+    if not is_user_admin(request):
+        return RedirectResponse(url="/loginn", status_code=302)
+    return templates.TemplateResponse("menu_form.html", {"request": request})
+
+# 📝 Handle Menu Submission (Admin Only)
+@router.post("/menu_form", response_class=HTMLResponse)
+def submit_menu(request: Request,
+                day: str = Form(...),
+                breakfast: str = Form(...),
+                lunch: str = Form(...),
+                dinner: str = Form(...),
+                special_item: str = Form(...),
+                spcial_price: int = Form(...)):
+    if not is_user_admin(request):
+        return RedirectResponse(url="/loginn", status_code=302)
+
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO menus (day, breakfast, lunch, dinner, special_item, spcial_price)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (day) DO UPDATE SET
+                breakfast = EXCLUDED.breakfast,
+                lunch = EXCLUDED.lunch,
+                dinner = EXCLUDED.dinner,
+                special_item = EXCLUDED.special_item,
+                spcial_price=EXCLUDED.spcial_price    
+        """, (day.capitalize(), breakfast, lunch, dinner,special_item, spcial_price))
+        conn.commit()
+        message = "✅ Menu updated successfully!"
+    except Exception as e:
+        conn.rollback()
+        message = f"❌ Error: {str(e)}"
+    finally:
+        cur.close()
+
+    return templates.TemplateResponse("menu_form.html", {
+        "request": request,
+        "message": message
+    })
+
+@router.get("/view_menu", response_class=HTMLResponse)
+def view_menu(request: Request):
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return RedirectResponse(url="/loginn", status_code=302)
+
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT day, breakfast, lunch, dinner, special_item, spcial_price FROM menus")
+        menu_data = cur.fetchall()
+    except Exception as e:
+        conn.rollback()
+        return templates.TemplateResponse("error.html", {"request": request, "message": str(e)})
+    finally:
+        cur.close()
+
+    return templates.TemplateResponse("view_menu.html", {
+        "request": request,
+        "menu_data": menu_data
+    })
+menu_form.html
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Menu Form</title>
+</head>
+<body>
+    <h2>🍽️ Mess Menu Form</h2>
+
+    <form method="post" action="/menu_form">
+        <label>Day of Week:
+            <select name="day" required>
+                <option>Monday</option>
+                <option>Tuesday</option>
+                <option>Wednesday</option>
+                <option>Thursday</option>
+                <option>Friday</option>
+                <option>Saturday</option>
+                <option>Sunday</option>
+            </select>
+        </label>
+        <br><br>
+
+        <label>Breakfast:</label><br>
+        <textarea name="breakfast" rows="2" cols="40" required></textarea><br><br>
+
+        <label>Lunch:</label><br>
+        <textarea name="lunch" rows="2" cols="40" required></textarea><br><br>
+
+        <label>Dinner:</label><br>
+        <textarea name="dinner" rows="2" cols="40" required></textarea><br><br>
+
+        
+        <label>Special Item:</label><br>
+        <textarea name="special_item" rows="2" cols="40" required></textarea><br><br>
+  
+        <label>Special Price:</label>
+        <input type="number" name="spcial_price" required><br><br>
+
+
+        <button type="submit">✅ Save</button>
+    </form>
+
+    {% if message %}
+        <p style="color:green;">{{ message }}</p>
+    {% endif %}
+    {% if error %}
+        <p style="color:red;">{{ error }}</p>
+    {% endif %}
+</body>
+</html>
+-------------------------------------------------------------------------------------
+monthly_bill.py
+
+from fastapi import APIRouter, Request
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import RedirectResponse
+from datetime import datetime
+import psycopg2
+import os
+
+router = APIRouter()
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "..", "templates"))
+
+# Database connection
+conn = psycopg2.connect(
+    database="messManager",
+    user="postgres",
+    password="pavi",
+    host="localhost",
+    port="5432"
+)
+
+@router.get("/bill")
+def view_monthly_bill(request: Request):
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return RedirectResponse(url="/loginn", status_code=302)
+
+    cur = conn.cursor()
+    month = datetime.now().strftime("%B %Y")
+
+    cur.execute("""
+        SELECT base_amount, token_charges, (base_amount + token_charges) AS total
+        FROM monthly_bill WHERE user_id = %s AND month = %s
+    """, (user_id, month))
+    bill = cur.fetchone()
+    cur.close()
+
+    return templates.TemplateResponse("monthlybill.html", {
+        "request": request,
+        "user_id": user_id,
+        "month": month,
+        "bill": bill
+    })
+monthlybill.html
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Monthly Bill</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+</head>
+<body class="bg-light">
+<div class="container mt-5">
+    <h2>Monthly Mess Bill for {{ user_id }}</h2>
+    <p>Month: {{ month }}</p>
+
+    {% if bill %}
+        <table class="table table-bordered">
+            <tr><th>Base Amount</th><td>₹{{ bill[0] }}</td></tr>
+            <tr><th>Token Charges</th><td>₹{{ bill[1] }}</td></tr>
+            <tr><th><strong>Total</strong></th><td><strong>₹{{ bill[2] }}</strong></td></tr>
+        </table>
+    {% else %}
+        <div class="alert alert-warning">No bill found for this month.</div>
+    {% endif %}
+
+    <a href="/" class="btn btn-primary">Back to Home</a>
+</div>
+</body>
+</html>
+-----------------------------------------------------------------------
+tokens.py
+
+from fastapi import APIRouter, Form, Request
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import RedirectResponse
+from datetime import datetime
+from decimal import Decimal
+import psycopg2
+import os
+
+router = APIRouter()
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "..", "templates"))
+
+# Database connection
+conn = psycopg2.connect(
+    database="messManager",
+    user="postgres",
+    password="pavi",
+    host="localhost",
+    port="5432"
+)
+@router.get("/token_form")
+def show_token_form(request: Request):
+    user_id = request.session.get("user_id")  # <-- Get user_id from session
+    if not user_id:
+        return RedirectResponse(url="/loginn", status_code=302)  # redirect to login if not logged in
+    
+    # Your existing code to fetch menu, etc.
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM menus WHERE day = %s", (datetime.now().strftime("%A"),))
+    menu = cur.fetchone()
+    cur.close()
+
+    return templates.TemplateResponse("token.html", {
+        "request": request,
+        "user_id": user_id,
+        "menu": menu
+    })
+@router.post("/submit_token")
+def submit_token(
+    request: Request,
+    menu_id: int = Form(...),
+    item_name: str = Form(...),
+    item_price: float = Form(...)
+):
+    user_id = request.session.get("user_id")  # ✅ Get user_id from session
+    if not user_id:
+        return RedirectResponse(url="/loginn", status_code=302)
+
+    cur = conn.cursor()
+    # Insert token entry
+    cur.execute("""
+        INSERT INTO tokens (user_id, menu_id, item_name, item_price, created_at)
+        VALUES (%s, %s, %s, %s, NOW())
+    """, (user_id, menu_id, item_name, item_price))
+
+    # Monthly bill update
+    month = datetime.now().strftime("%B %Y")
+    cur.execute("SELECT * FROM monthly_bill WHERE user_id = %s AND month = %s", (user_id, month))
+    bill = cur.fetchone()
+
+    item_price_decimal = Decimal(str(item_price))
+
+    if bill:
+        updated_charges = bill[4] + item_price_decimal
+        cur.execute("""
+            UPDATE monthly_bill SET token_charges = %s
+            WHERE user_id = %s AND month = %s
+        """, (updated_charges, user_id, month))
+    else:
+        base_amount = Decimal("2000.00")
+        cur.execute("""
+            INSERT INTO monthly_bill (user_id, month, base_amount, token_charges)
+            VALUES (%s, %s, %s, %s)
+        """, (user_id, month, base_amount, item_price_decimal))
+
+    conn.commit()
+    cur.close()
+    return templates.TemplateResponse("submit.html", {
+        "request": request,
+        "message": "Token submitted and bill updated!"
+    })
+tokens.html
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Special Token Form</title>
+</head>
+<body>
+    <h1>🍽️ Special Token Form</h1>
+
+    {% if menu %}
+        <p><strong>Hello, {{ student_name }}!</strong></p>
+        <p><strong>Day:</strong> {{ menu[1] }}</p>
+        <p><strong>Special Item:</strong> {{ menu[5] }}</p>
+        <p><strong>Special Price:</strong> ₹{{ menu[6] }}</p>
+        
+<form method="post" action="/submit_token">
+    <!-- Hidden values from menu -->
+    <input type="hidden" name="menu_id" value="{{ menu[0] }}">
+    <input type="hidden" name="item_name" value="{{ menu[5] }}">
+    <input type="hidden" name="item_price" value="{{ menu[6] }}">
+
+    <p><strong>User:</strong> ID {{ user_id }}</p>
+
+    <button type="submit">Get Token</button>
+</form>
+
+
+    {% else %}
+        <p style="color:red;">❌ No menu available for today.</p>
+    {% endif %}
+</body>
+</html>
+
+submit.html
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Success</title>
+</head>
+<body>
+    <h2 style="color: green;">✅ {{ message }}</h2>
+    <a href="/">Back to Home</a>
+</body>
+</html>
+-------------------------------------------------------------------------------
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+import psycopg2
+import os
+
+router = APIRouter()
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "..", "templates"))
+
+# Database connection
+conn = psycopg2.connect(
+    database="messManager",
+    user="postgres",
+    password="pavi",
+    host="localhost",
+    port="5432"
+)
+
+@router.get("/login", response_class=HTMLResponse)
+def show_login_form(request: Request):
+    # Show login form
+    return templates.TemplateResponse("loginn.html", {"request": request})
+
+@router.post("/login")
+def login(request: Request, name: str = Form(...), password: str = Form(...)):
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, is_admin FROM users WHERE name = %s AND password = %s", (name, password))
+    result = cur.fetchone()
+    cur.close()
+
+    if result:
+        user_id, is_admin = result
+        request.session['user_id'] = user_id
+        request.session['is_admin'] = is_admin
+
+        # Redirect based on role
+        if is_admin:
+            return RedirectResponse(url="/admin/dashboard", status_code=302)
+        else:
+            return RedirectResponse(url="/student/dashboard", status_code=302)
+    else:
+        # Invalid credentials, show form with error
+        return templates.TemplateResponse("loginn.html", {
+            "request": request,
+            "error": "❌ Invalid username or password"
+        })
+---------------------------------------------------
+home.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mess Manager - Home</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+
+<div class="container mt-5">
+  <div class="row justify-content-center">
+    <div class="col-md-6 text-center">
+      <h1 class="mb-4">Welcome to Mess Management System</h1>
+
+      <!-- Login Form -->
+      <form method="post" action="/login" enctype="application/x-www-form-urlencoded" class="card p-4 shadow">
+  <div class="mb-3">
+    <label for="name" class="form-label">Name</label>
+    <input type="text" name="name" id="name" class="form-control" required />
+  </div>
+
+   <div class="mb-3">
+    <label for="user_id" class="form-label">Enter your User ID</label>
+    <input type="text" name="user_id" id="user_id" class="form-control" required autofocus />
+  </div>
+  <button type="submit" class="btn btn-primary">Login</button>
+
+  {% if error %}
+    <div class="mt-3 alert alert-danger">{{ error }}</div>
+  {% endif %}
+</form>
+
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
+---------------------
+adminpanel.html
+
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin Panel - Mess Manager</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+  <div class="container mt-5">
+    <h2>Admin Panel</h2>
+    <p>Welcome, {{ user_id }}!</p>
+    <div class="d-grid gap-3 mt-4">
+      <a href="/menu_form" class="btn btn-success">Update Daily Menu</a>
+      <a href="/view_feedback" class="btn btn-info">View All Feedback</a>
+      <a href="/token_form" class="btn btn-warning">Issue Special Token</a>
+      <a href="/logout" class="btn btn-danger">Logout</a>
+    </div>
+  </div>
+</body>
+</html>
+----------------------------
+studentpanel.html
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Student Panel - Mess Manager</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+  <div class="container mt-5">
+    <h2>Student Panel</h2>
+    <p>Welcome, {{ user_id }}!</p>
+    <div class="d-grid gap-3 mt-4">
+      <a href="/view_menu" class="btn btn-success">View Menu</a>
+      <a href="/skip_meal" class="btn btn-danger">Skip Meal</a>
+      <a href="/feedback" class="btn btn-info">Submit Feedback</a>
+      <a href="/token_form" class="btn btn-warning">Get Token</a>
+      <a href="/bill" class="btn btn-primary">View Bill</a>
+      <a href="/logout" class="btn btn-danger">Logout</a>
+    </div>
+  </div>
+</body>
+</html>
+--------------------
+feedback.html
+
+<form method="post" action="/feedback">
+    <label for="message">Message:</label>
+    <textarea id="message" name="message" required></textarea>
+
+    <button type="submit">Submit Feedback</button>
+
+    {% if message %}
+        <p>{{ message }}</p>
+    {% endif %}
+</form>
+ <div class="text-center mt-4">
+            <a href="/" class="btn btn-outline-primary">🏠 Back to Home</a>
+        </div>
+{% if is_admin %}
+    <a href="/view_feedback">🔍 View All Feedback</a>
+{% endif %}
+--------------------
+view_feedback.html
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>All Feedback - Admin Panel</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+</head>
+<body class="bg-light">
+  <div class="container mt-5">
+    <h2>All Feedback</h2>
+
+    {% if error %}
+      <div class="alert alert-danger" role="alert">
+        {{ error }}
+      </div>
+    {% endif %}
+
+    {% if feedbacks and feedbacks|length > 0 %}
+      <ul class="list-group">
+        {% for name, message, submitted_at in feedbacks %}
+          <li class="list-group-item">
+            <strong>{{ name }}</strong> said:<br />
+            <em>"{{ message }}"</em><br />
+            <small class="text-muted">{{ submitted_at }}</small>
+          </li>
+        {% endfor %}
+      </ul>
+    {% elif not error %}
+      <p>No feedback has been submitted yet.</p>
+    {% endif %}
+
+    <a href="/adminpanel" class="btn btn-secondary mt-4">Back to Admin Panel</a>
+  </div>
+</body>
+</html>
+-------------------
+menu_form.html
+
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Menu Form</title>
+</head>
+<body>
+    <h2>🍽️ Mess Menu Form</h2>
+
+    <form method="post" action="/menu_form">
+        <label>Day of Week:
+            <select name="day" required>
+                <option>Monday</option>
+                <option>Tuesday</option>
+                <option>Wednesday</option>
+                <option>Thursday</option>
+                <option>Friday</option>
+                <option>Saturday</option>
+                <option>Sunday</option>
+            </select>
+        </label>
+        <br><br>
+    
+        <label>Breakfast:</label><br>
+        <textarea name="breakfast" rows="2" cols="40" required></textarea><br><br>
+
+        <label>Lunch:</label><br>
+        <textarea name="lunch" rows="2" cols="40" required></textarea><br><br>
+
+        <label>Dinner:</label><br>
+        <textarea name="dinner" rows="2" cols="40" required></textarea><br><br>
+
+        
+        <label>Special Item:</label><br>
+        <textarea name="special_item" rows="2" cols="40" required></textarea><br><br>
+  
+        <label>Special Price:</label>
+        <input type="number" name="spcial_price" required><br><br>
+
+        <div class="text-center mt-4">
+            <a href="/" class="btn btn-outline-primary">🏠 Back to AdminPanel</a>
+        </div>
+        <button type="submit">✅ Save</button>
+    </form>
+
+    {% if message %}
+        <p style="color:green;">{{ message }}</p>
+    {% endif %}
+    {% if error %}
+        <p style="color:red;">{{ error }}</p>
+    {% endif %}
+</body>
+</html>
+----------------
+view_menu.html
+
+<h2>📅 Weekly Menu</h2>
+<table border="1">
+  <tr>
+    <th>Day</th>
+    <th>Breakfast</th>
+    <th>Lunch</th>
+    <th>Dinner</th>
+    <th>Special Item</th>
+    <th>Token_price</th>
+  </tr>
+  {% for day, breakfast, lunch, special_item, dinner, spcial_price in menu_data %}
+  <tr>
+    <td>{{ day }}</td>
+    <td>{{ breakfast }}</td>
+    <td>{{ lunch }}</td>
+    <td>{{ dinner }}</td>
+    <td>{{ special_item }}</td>
+    <td>{{ spcial_price }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+ <a href="/" class="btn btn-outline-primary">🏠 Back to StudentPanel</a>
+--------------
+skip_meal.html
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Skip a Meal</title>
+</head>
+<body>
+    <h2>Skip Your Meal</h2>
+
+    {% if message %}
+        <p style="color: green;">{{ message }}</p>
+    {% endif %}
+
+    <form method="post" action="/skip_meal">
+        <label for="meal_type">Meal Type:</label>
+        <select name="meal_type" id="meal_type">
+            <option value="Breakfast">Breakfast</option>
+            <option value="Lunch">Lunch</option>
+            <option value="Dinner">Dinner</option>
+        </select>
+
+        <button type="submit">Skip Meal</button>
+    </form>
+
+    <br>
+    <a href="/view_skipped_meals">View Skipped Meals</a>
+
+     <div class="text-center mt-4">
+            <a href="/" class="btn btn-outline-primary">🏠 Back to StudentPanel</a>
+        </div>
+</body>
+</html>
+--------------
+token.html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Special Token Form</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+</head>
+<body class="bg-light">
+<div class="container mt-5">
+    <h2>🍽️ Special Token Form</h2>
+
+    {% if menu %}
+        <p><strong>Welcome, User ID {{ user_id }}</strong></p>
+        <p><strong>Day:</strong> {{ menu[1] }}</p>
+        <p><strong>Special Item:</strong> {{ menu[5] }}</p>
+        <p><strong>Special Price:</strong> ₹{{ menu[6] }}</p>
+
+        <form method="post" action="/submit_token" class="mt-3">
+            <input type="hidden" name="menu_id" value="{{ menu[0] }}">
+            <input type="hidden" name="item_name" value="{{ menu[5] }}">
+            <input type="hidden" name="item_price" value="{{ menu[6] }}">
+
+            <button type="submit" class="btn btn-success">Get Token</button>
+        </form>
+    {% else %}
+        <div class="alert alert-warning mt-3">❌ No menu available for today.</div>
+    {% endif %}
+
+    <a href="/" class="btn btn-secondary mt-4">Back to panel</a>
+</div>
+</body>
+</html>
+h2 {
+      text-align: center;
+      font-weight: bold;
+      margin-bottom: 2rem;
+      background: -webkit-linear-gradient(90deg, #2c3e50, #e67e22);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+----------------
+view_skipmeal.html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Skip a Meal</title>
+</head>
+<body>
+    <h2>Skip Your Meal</h2>
+
+    {% if message %}
+        <p style="color: green;">{{ message }}</p>
+    {% endif %}
+
+    <form method="post" action="/skip_meal">
+        <label for="meal_type">Meal Type:</label>
+        <select name="meal_type" id="meal_type">
+            <option value="Breakfast">Breakfast</option>
+            <option value="Lunch">Lunch</option>
+            <option value="Dinner">Dinner</option>
+        </select>
+
+        <button type="submit">Skip Meal</button>
+    </form>
+    <br>
+    <a href="/view_skipped_meals">View Skipped Meals</a>
+     <a href="/" class="btn btn-outline-primary">🏠 Back to StudentPanel</a>
+</body>
+</html>
+
+<style>
+    body {
+      background: linear-gradient(to right, #f1c40f, #e67e22);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Segoe UI', sans-serif;
+    }
+
+    .feedback-form {
+      background: #ffffff;
+      padding: 40px;
+      border-radius: 20px;
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.15);
+      max-width: 600px;
+      width: 100%;
+    }
+
+    .feedback-form h2 {
+      font-size: 2rem;
+      background: linear-gradient(to right, #e67e22, #f1c40f);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: transparent;
+      font-weight: bold;
+      margin-bottom: 1.5rem;
+      text-align: center;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 120px;
+    }
+
+    .btn-submit {
+      background-color: #e67e22;
+      color: white;
+      font-weight: 600;
+    }
+
+    .btn-submit:hover {
+      background-color: #d35400;
+    }
+
+    .alert-message {
+      margin-top: 20px;
+    }
+
+    .admin-link {
+      margin-top: 20px;
+      display: block;
+      text-align: center;
+      font-weight: 500;
+      text-decoration: none;
+      color: #2980b9;
+    }
+
+    .admin-link:hover {
+      text-decoration: underline;
+    }
+  </style>
+
+
+  from fastapi import APIRouter, Request, Depends,Form
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import RedirectResponse
+from starlette.responses import HTMLResponse
+import os
+
+router = APIRouter()
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "..", "templates"))
+
+def get_current_user(request: Request):
+    user_id = request.session.get("user_id")
+    is_admin = request.session.get("is_admin")
+    if not user_id:
+        # Not logged in, redirect to home/login page
+        return None
+    return {"user_id": user_id, "is_admin": is_admin}
+
+@router.get("/changepassword", response_class=HTMLResponse)
+def change_password_form(request: Request, user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url="/")
+    return templates.TemplateResponse("changepassword.html", {"request": request, "user_id": user["user_id"]})
+
+@router.post("/changepassword")
+def update_password(request: Request, current_password: str = Form(...), new_password: str = Form(...), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url="/")
+
+@router.get("/adminpanel")
+def admin_panel(request: Request, user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url="/")
+    if not user["is_admin"]:
+        # Unauthorized access redirect to student panel or home
+        return RedirectResponse(url="/studentpanel")
+    return templates.TemplateResponse("adminpanel.html", {"request": request, "user_id": user["user_id"]})
+
+@router.get("/studentpanel")
+def student_panel(request: Request, user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url="/")
+    if user["is_admin"]:
+        # Admin trying to access student panel? Redirect to admin panel or home
+        return RedirectResponse(url="/adminpanel")
+    return templates.TemplateResponse("studentpanel.html", {"request": request, "user_id": user["user_id"]})
+
+@router.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/")
